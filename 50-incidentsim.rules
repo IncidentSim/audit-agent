@@ -1,0 +1,21 @@
+# Track login sessions, including root and commands run through sudo.
+# No auid>=1000 filter: root SSH sessions must also be tracked.
+-a always,exit -F arch=b64 -S execve,execveat -F auid!=unset -k incsim_exec
+-a always,exit -F arch=b64 -S chdir,fchdir -F auid!=unset -k incsim_chdir
+-a always,exit -F arch=b64 -S open -F a1&0x243 -F auid!=unset -k incsim_file
+-a always,exit -F arch=b64 -S openat -F a2&0x243 -F auid!=unset -k incsim_file
+# openat2 stores flags in a struct; record it without filtering the flags.
+-a always,exit -F arch=b64 -S openat2 -F auid!=unset -k incsim_file_open
+-a always,exit -F arch=b64 -S creat,truncate,ftruncate,rename,renameat,renameat2,unlink,unlinkat,link,linkat,symlink,symlinkat,mkdir,mkdirat,rmdir -F auid!=unset -k incsim_file
+-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat,chown,fchown,lchown,fchownat,setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr,utime,utimes,utimensat -F auid!=unset -k incsim_metadata
+-a always,exit -F arch=b64 -S connect -F auid!=unset -k incsim_connect
+# Include 32-bit compatibility programs on x86_64 kernels.
+-a always,exit -F arch=b32 -S execve,execveat -F auid!=unset -k incsim_exec
+-a always,exit -F arch=b32 -S chdir,fchdir -F auid!=unset -k incsim_chdir
+-a always,exit -F arch=b32 -S open -F a1&0x243 -F auid!=unset -k incsim_file
+-a always,exit -F arch=b32 -S openat -F a2&0x243 -F auid!=unset -k incsim_file
+-a always,exit -F arch=b32 -S openat2 -F auid!=unset -k incsim_file_open
+-a always,exit -F arch=b32 -S creat,truncate,ftruncate,rename,renameat,renameat2,unlink,unlinkat,link,linkat,symlink,symlinkat,mkdir,mkdirat,rmdir -F auid!=unset -k incsim_file
+-a always,exit -F arch=b32 -S chmod,fchmod,fchmodat,chown,fchown,lchown,fchownat,setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr,utime,utimes,utimensat -F auid!=unset -k incsim_metadata
+-a always,exit -F arch=b32 -S connect,socketcall -F auid!=unset -k incsim_connect
+-e 1
