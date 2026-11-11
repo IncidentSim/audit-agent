@@ -3,3 +3,4 @@
 *.py text eol=lf
 *.rules text eol=lf
 *.conf text eol=lf
+*.md text eol=lf

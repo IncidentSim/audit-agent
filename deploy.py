@@ -11,9 +11,11 @@ import sys
 import tarfile
 
 FILES = (
-    'install.py', 'incident-audit.py', 'incident_audit_capture.py', 'incidentsim-audit.sh',
+    'install.py', 'incident-audit.py', 'incident_audit_capture.py', 'incident_audit_compact.py',
+    'incidentsim-audit.sh',
     'incidentsim-json.conf', '50-incidentsim.rules',
-    'test_audit.py', 'test_capture.py', 'test_deploy.py', 'verify.py', 'README.md', 'deploy.py',
+    'test_audit.py', 'test_capture.py', 'test_compact.py', 'test_deploy.py',
+    'verify.py', 'README.md', 'llm-analysis-prompt.md', 'deploy.py',
 )
 
 # No remote shell interpolation of destination paths, VM labels or credentials.
@@ -51,7 +53,8 @@ with tempfile.TemporaryDirectory(prefix='incident-audit-') as directory:
     subprocess.run(command, check=True)
     if options['verify']:
         subprocess.run(prefix + [sys.executable, '-B', '-m', 'unittest', '-v',
-                                 'test_audit.py', 'test_capture.py', 'test_deploy.py'], cwd=stage, check=True)
+                                 'test_audit.py', 'test_capture.py', 'test_compact.py',
+                                 'test_deploy.py'], cwd=stage, check=True)
         subprocess.run(prefix + [sys.executable, '-B', str(stage / 'verify.py')], check=True)
 '''
 

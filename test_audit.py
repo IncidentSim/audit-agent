@@ -98,6 +98,12 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(len({event['event_id'] for event in events}), 2)
         self.assertTrue(all(event['process']['argv'][2] == 'two words' for event in events))
 
+    def test_collector_file_syscalls_are_instrumentation_with_stale_proctitle(self):
+        text = event_records().replace('syscall=59', 'syscall=257').replace(
+            'comm="printf" exe="/usr/bin/printf" key="incsim_exec"',
+            'comm="incident-audit" exe="/usr/bin/python3.12" key="incsim_file"')
+        self.assertEqual(self.parse(text)['origin'], 'instrumentation')
+
     def test_concurrent_jsonl_writers_preserve_events_and_newlines(self):
         original = agent.ROOT
         with tempfile.TemporaryDirectory() as directory:

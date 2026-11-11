@@ -9,7 +9,8 @@ __incidentsim_hook_loaded=1
 HISTCONTROL=
 HISTIGNORE=
 set -o history
-__incidentsim_last_finished=$(HISTTIMEFORMAT= builtin history 1)
+__incidentsim_last_finished=
+__incidentsim_prompt_ready=0
 
 __incidentsim_preexec() {
   /usr/local/sbin/incident-audit shell --phase start \
@@ -21,6 +22,12 @@ __incidentsim_preexec() {
 __incidentsim_prompt() {
   local command_status=$? entry
   entry=$(HISTTIMEFORMAT= builtin history 1)
+  # The hook's own installation changes history before the first prompt.
+  if [[ $__incidentsim_prompt_ready != 1 ]]; then
+    __incidentsim_last_finished=$entry
+    __incidentsim_prompt_ready=1
+    return "$command_status"
+  fi
   if [[ $entry != "$__incidentsim_last_finished" ]]; then
     /usr/local/sbin/incident-audit shell --phase finish \
       --history "$entry" --status "$command_status" \

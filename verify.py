@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Exercise installed collection without printing any participant commands."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -40,6 +41,8 @@ with tempfile.TemporaryDirectory(prefix=marker + '-') as directory:
     subprocess.run(['/usr/bin/rm', str(target)], check=True)
     script = (f'cd {directory}\n'
               f'false # {marker}-false\n'
+              f'printf repeat # {marker}-repeat\n'
+              f'printf repeat # {marker}-repeat\n'
               f'printf builtin > {marker}-builtin\n'
               f'exit # {marker}-exit\n')
     shell = subprocess.run(
@@ -100,12 +103,38 @@ with tempfile.TemporaryDirectory(prefix=marker + '-') as directory:
     assert manifest['collector']['conversion_errors'] == 0
     assert manifest['capture']['phase'] == 'stopped'
     assert manifest['capture']['start_boundary']['serial'] < manifest['capture']['stop_boundary']['serial']
-    for path in (Path(exported['output']), Path(exported['manifest'])):
+    packet = json.loads(Path(exported['llm']).read_text())
+    stats = json.loads(Path(exported['llm_stats']).read_text())
+    sources = json.loads(Path(exported['llm_sources']).read_text())
+    assert packet['session'] == marker
+    assert packet['coverage']['stdout'] is False
+    assert packet['coverage']['file_contents'] is False
+    assert any(a.get('cmd') == f'false # {marker}-false' and a['rc'] == 1
+               for a in packet['actions']), 'compact export lost actual Bash failure'
+    assert any(argument in a.get('cmd', '') and a['rc'] is None
+               for a in packet['actions']), 'compact export invented an exec exit status'
+    assert len([a for a in packet['actions']
+                if a.get('cmd') == f'printf repeat # {marker}-repeat']) == 2, 'repeated commands merged'
+    assert not any('__incidentsim_' in a.get('cmd', '') for a in packet['actions']), 'hook setup leaked'
+    assert not any('/var/log/incidentsim/' in json.dumps(a.get('effects', []))
+                   for a in packet['actions']), 'collector file noise leaked'
+    assert not any(a in json.dumps(packet) for a in (before_argument, after_argument))
+    assert stats['compact_bytes'] < stats['source_bytes'], 'compact export did not shrink test data'
+    assert stats['actions'] < stats['input_events']
+    assert sources['sha256'] == hashlib.sha256(Path(exported['output']).read_bytes()).hexdigest()
+    event_ids = {e['event_id'] for e in actions}
+    assert all(set(refs) <= event_ids for refs in sources['actions'].values()), 'invalid source references'
+    for path in (Path(exported['output']), Path(exported['manifest']), Path(exported['llm']),
+                 Path(exported['llm_stats']), Path(exported['llm_sources'])):
         assert path.stat().st_mode & 0o777 == 0o600, 'private export permissions required'
     print(json.dumps({'result': 'PASS', 'events_in_export': len(actions),
+                      'llm_actions': stats['actions'], 'source_bytes': stats['source_bytes'],
+                      'compact_bytes': stats['compact_bytes'],
                       'audit_lost': manifest['audit']['lost'],
                       'checks': ['exec arguments with Unicode/newlines', 'root identity',
                                  'file changes', 'Bash builtins', 'failed command status',
                                  'exit command input', 'ordered deduplicated JSONL',
                                  'raw-log recovery', 'private file permissions',
-                                 'start/stop window', 'validation excluded', 'recording frozen']}))
+                                 'start/stop window', 'validation excluded', 'recording frozen',
+                                 'compact packet', 'no invented status', 'repeats preserved',
+                                 'provenance references']}))

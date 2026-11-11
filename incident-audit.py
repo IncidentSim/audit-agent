@@ -17,6 +17,7 @@ import uuid
 
 import auparse
 from incident_audit_capture import CaptureStore, atomic_json, boot_id, in_window, locked
+from incident_audit_compact import compact_file
 
 ROOT = Path('/var/log/incidentsim')
 CONTEXT = Path('/etc/incidentsim/audit-context.json')
@@ -184,11 +185,17 @@ def normalize(parser, vm_id):
     else:
         kind = 'audit'
     arguments = process['argv']
-    boundary_command = (len(arguments) == 3 and Path(arguments[0]).name == 'auditctl' and
+    boundary_command = (len(arguments) == 3 and arguments[0] is not None and
+                        Path(arguments[0]).name == 'auditctl' and
                         arguments[1] == '-m' and
+                        arguments[2] is not None and
                         re.fullmatch(r'incsim_boundary=[a-f0-9]{32}', arguments[2]) is not None)
+    # For a shebang script, PROCTITLE can still contain the parent Bash argv.
+    # comm/exe identify the running collector for its file syscalls as well.
+    collector_process = (process['name'] == 'incident-audit' and
+                         Path(process['executable'] or '').name.startswith('python'))
     origin = ('instrumentation' if '/usr/local/sbin/incident-audit' in
-              arguments[:2] or boundary_command else 'session')
+              arguments[:2] or boundary_command or collector_process else 'session')
     event = {
         'schema_version': 1, 'event_id': f'{vm_id}:audit:{stamp.sec}.{stamp.milli:03}:{stamp.serial}',
         'timestamp': timestamp, 'vm_id': vm_id, 'source': 'auditd', 'kind': kind,
@@ -414,8 +421,13 @@ def export_events(args, window=None, emit=True):
                                      'Root can disable or alter this guest-local telemetry.',
                                      'Bash hooks apply to new interactive Bash shells.'])
         atomic_json(output.with_suffix('.manifest.json'), manifest)
+        compact = compact_file(output) if window else None
     result = {'output': str(output), 'events': count,
               'manifest': str(output.with_suffix('.manifest.json'))}
+    if compact:
+        result.update({key: compact[key] for key in
+                       ('llm', 'llm_sources', 'llm_stats', 'compact_bytes')})
+        result['llm_actions'] = compact['actions']
     if emit:
         print(encode(result))
     return result
@@ -431,6 +443,13 @@ def main():
     start.add_argument('--session-id', required=True)
     stop = commands.add_parser('stop', help='seal recording before running validation')
     stop.add_argument('--session-id', required=True)
+    compact = commands.add_parser('compact', help='build an action-level packet for an LLM')
+    compact.add_argument('--session-id')
+    compact.add_argument('--output', type=Path)
+    compact.add_argument('--effects-limit', type=int, default=24)
+    compact.add_argument('--exec-limit', type=int, default=12)
+    compact.add_argument('--max-bytes', type=int)
+    compact.add_argument('--tokenizer', type=Path)
     export = commands.add_parser('export')
     export.add_argument('--output')
     selection = export.add_mutually_exclusive_group()
@@ -465,6 +484,15 @@ def main():
             args.session_id, audit_boundary,
             lambda window: export_events(export_args, window=window, emit=False))
         print(encode({**state, **state['artifacts']}))
+    elif args.operation == 'compact':
+        window = captures().get(args.session_id)
+        if window['phase'] != 'stopped':
+            raise RuntimeError('stop recording before preparing an LLM packet')
+        with locked(ROOT / '.export.lock'):
+            source = captures().directory(window['session_id']) / 'actions.jsonl'
+            print(encode(compact_file(source, output=args.output,
+                                     effects_limit=args.effects_limit, exec_limit=args.exec_limit,
+                                     max_bytes=args.max_bytes, tokenizer_path=args.tokenizer)))
     elif args.operation == 'mark':
         event = {'schema_version': 1, 'event_id': str(uuid.uuid4()), 'timestamp': now(),
                 'vm_id': context()['vm_id'], 'source': 'control', 'kind': 'marker',
