@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import socket
+import ssl
 from pathlib import Path
 import sys
 import urllib.error
@@ -39,6 +41,8 @@ def load_settings(path, profile=None):
         raise AnalysisError('model must be a nonempty string')
     if not isinstance(provider['timeout_seconds'], (int, float)) or provider['timeout_seconds'] <= 0:
         raise AnalysisError('timeout_seconds must be positive')
+    if provider.get('proxy_mode', 'environment') not in ('environment', 'direct'):
+        raise AnalysisError('proxy_mode must be environment or direct')
     return path.parent, config, name, provider
 
 
@@ -60,7 +64,14 @@ def build_request(folder, config, provider, packet_path, task_path, validation_p
     request = {**parameters, 'model': provider['model'], 'stream': False,
                'messages': [{'role': 'system', 'content': prompt},
                             {'role': 'user', 'content': dumps(
-                                {'task': task, 'validation': validation, 'recording': packet})}]}
+                                {'report_type': 'incident_postmortem',
+                                 'execution_context': {
+                                     'orchestrator': 'CLI on the learner computer; LLM request runs there',
+                                     'learner_environment': 'terminal inside the exercise VM',
+                                     'preparation': 'VM creation, infra and incident injection happen before recording',
+                                     'validation': 'Ansible runs after recording stops; do not attribute it to learner actions',
+                                     'scope': 'training incident; no real production impact is established'},
+                                 'task': task, 'validation': validation, 'recording': packet})}]}
     body = dumps(request).encode('utf-8')
     if len(body) > config['max_request_bytes']:
         raise AnalysisError('request exceeds max_request_bytes; no actions were truncated or sent')
@@ -89,7 +100,10 @@ def chat_completions(provider, body, key, response_limit):
     endpoint = provider['base_url'].rstrip('/') + '/chat/completions'
     request = urllib.request.Request(endpoint, data=body, method='POST', headers={
         'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})
-    opener = urllib.request.build_opener(NoRedirect())
+    handlers = [NoRedirect()]
+    if provider.get('proxy_mode', 'environment') == 'direct':
+        handlers.append(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
     try:
         with opener.open(request, timeout=provider['timeout_seconds']) as response:
             raw = response.read(response_limit + 1)
@@ -99,8 +113,23 @@ def chat_completions(provider, body, key, response_limit):
         hints = {401: 'check API key', 402: 'check provider balance',
                  429: 'provider rate limit; retry later', 400: 'check model and parameters'}
         raise AnalysisError(f'LLM HTTP {error.code}: ' + hints.get(error.code, 'provider request failed')) from None
-    except (urllib.error.URLError, TimeoutError, OSError):
-        raise AnalysisError('LLM connection failed or timed out; no automatic retry was made') from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = error.reason if isinstance(error, urllib.error.URLError) else error
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            detail = 'TLS certificate verification failed; check system CA certificates'
+        elif isinstance(reason, socket.gaierror):
+            detail = 'DNS lookup failed'
+        elif isinstance(reason, TimeoutError):
+            detail = 'connection or response timed out'
+        elif '407' in str(reason) and 'Tunnel connection failed' in str(reason):
+            detail = 'proxy authentication required'
+        else:
+            detail = 'network connection failed'
+        if provider.get('proxy_mode', 'environment') == 'direct':
+            detail += ' (direct connection)'
+        elif any(urllib.request.getproxies().get(scheme) for scheme in ('http', 'https')):
+            detail += ' (system proxy configured; check proxy settings or use proxy_mode=direct)'
+        raise AnalysisError('LLM ' + detail + '; no automatic retry was made') from None
     if len(raw) > response_limit:
         raise AnalysisError('LLM response exceeds max_response_bytes')
     try:
@@ -135,7 +164,8 @@ def analyze(config_path, packet_path, task_path, output=None, validation_path=No
         key = api_key(folder, provider)
         content, usage, model, response_id = chat_completions(
             provider, body, key, config['max_response_bytes'])
-        report = {'v': 1, 'session': session, 'profile': name, 'model': model,
+        report = {'v': 1, 'report_type': 'incident_postmortem',
+                  'session': session, 'profile': name, 'model': model,
                   'base_url': provider['base_url'], 'response_id': response_id,
                   'created_at': datetime.now(timezone.utc).isoformat(),
                   'packet_sha256': source_hash, 'request_sha256': hashlib.sha256(body).hexdigest(),

@@ -1,10 +1,12 @@
 """LLM request/credential/budget checks with a local fake provider; no paid API calls."""
 import json
+import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import tempfile
 import threading
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 from analyze import AnalysisError, analyze
@@ -78,9 +80,14 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(request['max_tokens'], 200)
         self.assertFalse(request['stream'])
         self.assertEqual(json.loads(request['messages'][1]['content'])['recording']['session'], 'attempt-1')
+        payload = json.loads(request['messages'][1]['content'])
+        self.assertEqual(payload['report_type'], 'incident_postmortem')
+        self.assertEqual(payload['execution_context']['learner_environment'], 'terminal inside the exercise VM')
+        self.assertIn('before recording', payload['execution_context']['preparation'])
         report = (self.root / 'report' / 'analysis.json').read_text()
         self.assertNotIn('test-file-secret', report)
         self.assertEqual(json.loads(report)['model'], 'actual-model')
+        self.assertEqual(json.loads(report)['report_type'], 'incident_postmortem')
         self.assertEqual(result['usage']['prompt_tokens'], 100)
         self.assertTrue(Path(result['output']).is_file())
 
@@ -89,6 +96,34 @@ class AnalyzeTests(unittest.TestCase):
         with patch.dict('os.environ', {'INCSIM_TEST_LLM_KEY': 'env-secret'}):
             self.run_analysis()
         self.assertEqual(self.received[0][1], 'Bearer env-secret')
+
+    def test_direct_mode_ignores_system_proxy(self):
+        self.server()
+        self.config['profiles']['test']['proxy_mode'] = 'direct'
+        self.save()
+        with patch('urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:1'}):
+            self.run_analysis()
+        self.assertEqual(len(self.received), 1)
+
+    def test_invalid_proxy_mode_is_rejected_before_network(self):
+        self.config['profiles']['test']['proxy_mode'] = 'invalid'
+        self.save()
+        with patch('analyze.chat_completions') as transport, self.assertRaisesRegex(AnalysisError, 'proxy_mode'):
+            self.run_analysis()
+        transport.assert_not_called()
+
+    def test_network_error_is_specific_sanitized_and_not_retried(self):
+        for reason, message in ((TimeoutError('private details'), 'timed out'),
+                                (socket.gaierror('private details'), 'DNS lookup failed'),
+                                (OSError('Tunnel connection failed: 407 private details'), 'proxy authentication required')):
+            with self.subTest(reason=type(reason).__name__):
+                with patch('urllib.request.build_opener') as factory:
+                    factory.return_value.open.side_effect = urllib.error.URLError(reason)
+                    with self.assertRaisesRegex(AnalysisError, message) as error:
+                        self.run_analysis()
+                    self.assertNotIn('private details', str(error.exception))
+                    self.assertNotIn('test-file-secret', str(error.exception))
+                    factory.return_value.open.assert_called_once()
 
     def test_dry_run_needs_no_key_and_does_not_call_network(self):
         (self.root / 'key').unlink()

@@ -12,7 +12,7 @@
       "api_key_file": "../.secrets/deepseek-api-key",
       "timeout_seconds": 120,
       "parameters": {
-        "max_tokens": 2000,
+        "max_tokens": 4000,
         "thinking": {"type": "disabled"}
       }
     }
