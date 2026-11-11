@@ -19,6 +19,8 @@ FILES = (
     'tests/test_compact.py', 'tests/test_deploy.py', 'tests/test_analyze.py',
     'scripts/verify.py', 'docs/prompts/llm-analysis-prompt.md',
     'docs/llm.md', 'docs/compact-format.md',
+    'docs/demo.md', 'scripts/demo.py', 'examples/http-service/task.md',
+    'examples/http-service/provision.py', 'examples/http-service/validate.py',
 )
 
 # No remote shell interpolation of destination paths, VM labels or credentials.
