@@ -11,11 +11,14 @@ import sys
 import tarfile
 
 FILES = (
-    'install.py', 'incident-audit.py', 'incident_audit_capture.py', 'incident_audit_compact.py',
-    'incidentsim-audit.sh',
-    'incidentsim-json.conf', '50-incidentsim.rules',
-    'test_audit.py', 'test_capture.py', 'test_compact.py', 'test_deploy.py',
-    'verify.py', 'README.md', 'llm-analysis-prompt.md', 'deploy.py',
+    'install.py', 'deploy.py', 'README.md',
+    'src/incident-audit.py', 'src/incident_audit_capture.py', 'src/incident_audit_compact.py',
+    'src/analyze.py', 'config/incidentsim-audit.sh', 'config/incidentsim-json.conf',
+    'config/50-incidentsim.rules', 'config/llm.example.json',
+    'tests/__init__.py', 'tests/test_audit.py', 'tests/test_capture.py',
+    'tests/test_compact.py', 'tests/test_deploy.py', 'tests/test_analyze.py',
+    'scripts/verify.py', 'docs/prompts/llm-analysis-prompt.md',
+    'docs/llm.md', 'docs/compact-format.md',
 )
 
 # No remote shell interpolation of destination paths, VM labels or credentials.
@@ -36,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix='incident-audit-') as directory:
         for entry in archive:
             if entry.name not in allowed or not entry.isfile():
                 raise RuntimeError('unexpected entry in audit-agent bundle')
+            (stage / entry.name).parent.mkdir(parents=True, exist_ok=True)
             with archive.extractfile(entry) as reader, (stage / entry.name).open('xb') as writer:
                 while True:
                     block = reader.read(1024 * 1024)
@@ -52,10 +56,9 @@ with tempfile.TemporaryDirectory(prefix='incident-audit-') as directory:
         command.append('--skip-packages')
     subprocess.run(command, check=True)
     if options['verify']:
-        subprocess.run(prefix + [sys.executable, '-B', '-m', 'unittest', '-v',
-                                 'test_audit.py', 'test_capture.py', 'test_compact.py',
-                                 'test_deploy.py'], cwd=stage, check=True)
-        subprocess.run(prefix + [sys.executable, '-B', str(stage / 'verify.py')], check=True)
+        subprocess.run(prefix + [sys.executable, '-B', '-m', 'unittest', 'discover',
+                                 '-s', 'tests', '-t', '.', '-v'], cwd=stage, check=True)
+        subprocess.run(prefix + [sys.executable, '-B', str(stage / 'scripts/verify.py')], check=True)
 '''
 
 

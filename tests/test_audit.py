@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
-    'incident_audit', Path(__file__).with_name('incident-audit.py'))
+    'incident_audit', Path(__file__).resolve().parents[1] / 'src/incident-audit.py')
 agent = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent)
 

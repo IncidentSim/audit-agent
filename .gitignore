@@ -1,3 +1,7 @@
 __pycache__/
 *.py[cod]
 /dist/
+/config/llm.local.json
+/.secrets/
+/analysis/
+.env

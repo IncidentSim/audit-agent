@@ -75,9 +75,9 @@ def main():
     args = parser.parse_args()
     preflight(args.skip_packages)
     source = Path(__file__).resolve().parent
-    for filename in ('incident-audit.py', 'incident_audit_capture.py',
-                     'incident_audit_compact.py', '50-incidentsim.rules',
-                     'incidentsim-json.conf', 'incidentsim-audit.sh'):
+    for filename in ('src/incident-audit.py', 'src/incident_audit_capture.py',
+                     'src/incident_audit_compact.py', 'config/50-incidentsim.rules',
+                     'config/incidentsim-json.conf', 'config/incidentsim-audit.sh'):
         if not (source / filename).is_file():
             raise RuntimeError(f'incomplete distribution: missing {filename}')
     context = Path('/etc/incidentsim/audit-context.json')
@@ -104,12 +104,12 @@ def main():
             encoding='utf-8')
         context.chmod(0o600)
     for src, dst, mode in [
-        ('incident-audit.py', '/usr/local/sbin/incident-audit', 0o755),
-        ('incident_audit_capture.py', '/usr/local/sbin/incident_audit_capture.py', 0o644),
-        ('incident_audit_compact.py', '/usr/local/sbin/incident_audit_compact.py', 0o644),
-        ('50-incidentsim.rules', '/etc/audit/rules.d/50-incidentsim.rules', 0o600),
-        ('incidentsim-json.conf', '/etc/audit/plugins.d/incidentsim-json.conf', 0o640),
-        ('incidentsim-audit.sh', '/etc/profile.d/incidentsim-audit.sh', 0o644),
+        ('src/incident-audit.py', '/usr/local/sbin/incident-audit', 0o755),
+        ('src/incident_audit_capture.py', '/usr/local/sbin/incident_audit_capture.py', 0o644),
+        ('src/incident_audit_compact.py', '/usr/local/sbin/incident_audit_compact.py', 0o644),
+        ('config/50-incidentsim.rules', '/etc/audit/rules.d/50-incidentsim.rules', 0o600),
+        ('config/incidentsim-json.conf', '/etc/audit/plugins.d/incidentsim-json.conf', 0o640),
+        ('config/incidentsim-audit.sh', '/etc/profile.d/incidentsim-audit.sh', 0o644),
     ]:
         destination = Path(dst)
         destination.parent.mkdir(parents=True, exist_ok=True)

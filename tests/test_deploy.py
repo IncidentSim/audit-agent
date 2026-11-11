@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / (name + '.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -33,6 +33,7 @@ def arguments(**overrides):
 class DeploymentTests(unittest.TestCase):
     def fixture_bundle(self, directory):
         for name in deploy.FILES:
+            (directory / name).parent.mkdir(parents=True, exist_ok=True)
             (directory / name).write_text('# fixture\n', encoding='utf-8')
         (directory / 'install.py').write_text(
             'import json, sys\nprint(json.dumps(sys.argv[1:]))\n', encoding='utf-8')
@@ -56,7 +57,7 @@ class DeploymentTests(unittest.TestCase):
     def test_key_paths_ports_and_proxy_jump_are_passed_as_argv(self):
         command = deploy.make_command(arguments(
             identity='/keys/a key', port=2222, ssh_option=['ProxyJump=bastion']))
-        self.assertIn('/keys/a key', command)
+        self.assertIn(str(Path('/keys/a key').expanduser()), command)
         self.assertIn('2222', command)
         self.assertIn('ProxyJump=bastion', command)
         self.assertEqual(command[-2], 'admin@host')
