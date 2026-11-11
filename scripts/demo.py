@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from analyze import analyze, AnalysisError
-from incident_audit_compact import atomic_text
+from incident_audit_compact import atomic_text, compact_file
 
 
 def remote(settings, arguments, source=None):
@@ -39,6 +39,8 @@ def finish(run_dir, config, dry_run=False):
                  'actions.manifest.json'):
         data = remote(settings, ['cat', f'/var/log/incidentsim/sessions/{identity}/{name}'])
         atomic_text(artifacts / name, data.decode('utf-8'))
+    # Apply the host's current filtering, including to exports from an older guest.
+    compact_file(artifacts / 'actions.jsonl')
     print('Logs collected. Running validation outside the recording window...', flush=True)
     validation = json.loads(remote(settings, ['python3', '-'],
                            (ROOT / 'examples/http-service/validate.py').read_bytes()))

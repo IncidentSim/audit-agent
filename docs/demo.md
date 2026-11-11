@@ -17,7 +17,9 @@ python scripts/demo.py finish --run-dir analysis/demo-current
 ```
 
 Команда сначала закрывает окно auditd, сохраняет полный и компактный журналы
-в `analysis/demo-current/artifacts/`, затем выполняет валидатор. Его результат
+в `analysis/demo-current/artifacts/`. Компактный пакет пересобирается на хосте
+по актуальным правилам отделения действий от SSH/служебных событий, в том числе
+для старого сборщика на VM. Затем выполняется валидатор. Его результат
 пишется в `analysis/demo-current/validation.json`. После этого компактный журнал,
 описание задачи и результат проверки отправляются в LLM. Ответ выводится
 в терминал и сохраняется в `analysis/demo-current/report/analysis.md`, а

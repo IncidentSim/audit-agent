@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix=marker + '-') as directory:
     assert any(a.get('cmd') == f'false # {marker}-false' and a['rc'] == 1
                for a in packet['actions']), 'compact export lost actual Bash failure'
     assert any(argument in a.get('cmd', '') and a['rc'] is None
-               for a in packet['actions']), 'compact export invented an exec exit status'
+               for a in packet['context']), 'compact export invented an exec exit status'
     assert len([a for a in packet['actions']
                 if a.get('cmd') == f'printf repeat # {marker}-repeat']) == 2, 'repeated commands merged'
     assert not any('__incidentsim_' in a.get('cmd', '') for a in packet['actions']), 'hook setup leaked'

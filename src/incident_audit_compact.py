@@ -102,6 +102,32 @@ def collector_event(event):
              Path(process.get('executable') or '').name.startswith('python')))
 
 
+def audit_session(event):
+    actor = event.get('actor') or {}
+    identity = actor.get('login_uid'), actor.get('session_id')
+    return identity if None not in identity else None
+
+
+def control_command(command):
+    """Recognize only a standalone collector invocation, never a compound script."""
+    if not isinstance(command, str) or any(c in command for c in ';|&$<>`\n'):
+        return False
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return False
+    return (len(args) >= 2 and Path(args[0]).name == 'incident-audit' and
+            args[1] in ('start', 'stop', 'status', 'export', 'compact', 'mark', 'shell'))
+
+
+def control_wrapper(event):
+    process = event.get('process') or {}
+    args = process.get('argv') or []
+    return (event.get('kind') == 'exec' and len(args) == 3 and
+            args[0] is not None and Path(args[0]).name in ('bash', 'sh', 'dash') and
+            args[1] in ('-c', '-lc') and control_command(args[2]))
+
+
 class Action:
     def __init__(self, key, moment, event, kind):
         self.key, self.start, self.end = key, moment, None
@@ -190,11 +216,22 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
     end = timestamp(window['stopped_at'])
     actions, shell_actions = [], {}
     input_counts = Counter()
+    discarded = Counter()
+    ssh_sessions, control_sessions = set(), set()
     for event in read_events(source):
         input_counts[event.get('source', 'unknown')] += 1
         if event.get('capture_session_id') != window['session_id']:
             raise ValueError('event belongs to another recording window')
+        session = audit_session(event)
+        process = event.get('process') or {}
+        if session and process.get('executable') in ('/usr/sbin/sshd', '/usr/bin/sshd'):
+            ssh_sessions.add(session)
+        if session and control_wrapper(event):
+            control_sessions.add(session)
         if event.get('source') != 'bash':
+            continue
+        if control_command(event.get('command')):
+            discarded['instrumentation'] += 1
             continue
         identity = event['command_id']
         moment = timestamp(event['timestamp'])
@@ -218,6 +255,13 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
     for group in by_shell.values():
         group.sort(key=lambda a: a.start)
     starts = {pid: [a.start for a in group] for pid, group in by_shell.items()}
+    first_commands = {}
+    for action in shell_actions.values():
+        session = action.actor[0], action.actor[2]
+        if None not in session and not action.missing_start:
+            first_commands[session] = min(first_commands.get(session, action.start), action.start)
+    # Only a separate SSH control connection can be suppressed as a whole.
+    control_sessions = (control_sessions & ssh_sessions) - set(first_commands)
 
     def shell_at(pid, moment, actor):
         group = by_shell.get(pid, [])
@@ -232,7 +276,6 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
         return None
 
     process_owners = {}
-    discarded = Counter()
     unattributed = 0
     for event in read_events(source):
         source_type, kind = event.get('source'), event.get('kind')
@@ -241,6 +284,15 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
         if collector_event(event):
             discarded['instrumentation'] += 1
             continue
+        session = audit_session(event)
+        if source_type == 'auditd':
+            if session in control_sessions:
+                discarded['control_connection'] += 1
+                continue
+            if (session in ssh_sessions and session in first_commands and
+                    timestamp(event['timestamp']) < first_commands[session]):
+                discarded['ssh_initialization'] += 1
+                continue
         if (kind == 'file' and event.get('syscall') in ('open', 'openat') and
                 event.get('syscall_success') is True):
             names = [p.get('name') for p in event.get('paths', [])
@@ -282,6 +334,10 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
             if (same_session(actor, candidate.actor) and
                     (candidate.end is None or moment <= candidate.end)):
                 owner = candidate
+        if (owner is None and kind != 'exec' and
+                process.get('executable') in ('/usr/sbin/sshd', '/usr/bin/sshd')):
+            discarded['ssh_transport'] += 1
+            continue
         if kind == 'exec':
             arguments = process.get('argv') or []
             # A fresh exec can represent PID reuse; do not inherit an old PID owner.
@@ -324,6 +380,9 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
             owner.effect(file_detail(event, owner))
 
     actions.sort(key=lambda a: (a.start, a.key))
+    confirmed = [a for a in actions if a.kind in ('command', 'note', 'system')]
+    unconfirmed = [a for a in actions if a.kind in ('exec', 'effect')]
+    actions = confirmed + unconfirmed
     identifiers = {a.key: index for index, a in enumerate(actions, 1)}
     actor_ids, actor_context, common_cwd = {}, {}, {}
     for action in actions:
@@ -339,7 +398,7 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
         if known:
             common_cwd[actor] = Counter(known).most_common(1)[0][0]
             actor_context[actor_ids[actor]]['cwd'] = common_cwd[actor]
-    timeline, references = [], {}
+    timeline, context, references = [], [], {}
     omitted_details, redactions = 0, 0
     for action in actions:
         identifier = identifiers[action.key]
@@ -373,7 +432,10 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
             if omitted:
                 row[field + '_omitted'] = omitted
                 omitted_details += omitted
-        timeline.append(row)
+        if action.kind in ('exec', 'effect'):
+            context.append(row)
+        else:
+            timeline.append(row)
         references[str(identifier)] = action.refs
     packet = {
         'v': 1, 'session': window['session_id'], 'duration_s': round(end - baseline, 3),
@@ -384,6 +446,7 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
             'dispatcher_errors': (manifest.get('collector') or {}).get('conversion_errors'),
             'unattributed_effects': unattributed, 'omitted_details': omitted_details,
             'attribution': 'best_effort_pid_parent_and_shell_interval',
+            'user_commands': len(shell_actions),
             'redaction': 'known_secret_patterns_only',
         },
         'legend': {'t': 'seconds since recording start', 's': 'actor ID',
@@ -392,10 +455,13 @@ def build_packet(source, manifest, effects_limit=24, exec_limit=12):
                    'cwd': 'actor cwd is the default; null is unknown',
                    'sysrc': 'syscall return, not program status; -115 means connect in progress',
                    'effects': 'observed operations, not file diffs; order is preserved',
-                   'via': 'exec lacks a Bash command; effect has uncertain attribution'},
+                   'via': 'exec lacks a Bash command; effect has uncertain attribution',
+                   'context': 'unattributed telemetry; never treat as user-entered commands'},
         'actions': timeline,
+        'context': context,
     }
     stats = {'input_events': sum(input_counts.values()), 'actions': len(timeline),
+             'context_rows': len(context),
              'shell_commands': len(shell_actions), 'discarded': dict(discarded),
              'omitted_details': omitted_details, 'redacted_command_rows': redactions}
     return packet, references, stats

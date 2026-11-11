@@ -80,7 +80,7 @@ class CompactTests(unittest.TestCase):
     def test_execve_success_is_not_program_success(self):
         self.export([executed(1, ['false']), executed(2, ['missing'], pid=12,
                      syscall_success=False, syscall_return=-2)])
-        first, second = self.packet['actions']
+        first, second = self.packet['context']
         self.assertIsNone(first['rc'])
         self.assertIsNone(second['rc'])
         self.assertEqual(second['exec_sysrc'], -2)
@@ -115,7 +115,8 @@ class CompactTests(unittest.TestCase):
                      shell(2, command='one', phase='finish', rc=0),
                      shell(2.1, command='two', command_id='two', shell_pid=20,
                            actor=other, phase='finish', rc=1)])
-        first, second, unknown = self.packet['actions']
+        first, second = self.packet['actions']
+        unknown, = self.packet['context']
         self.assertEqual(first['effects'][0]['p'], '/one')
         self.assertEqual(second['effects'][0]['p'], '/two')
         self.assertNotEqual(first['s'], second['s'])
@@ -126,14 +127,16 @@ class CompactTests(unittest.TestCase):
         self.export([shell(1, command='sleep 1 &'), executed(1.1, ['sleep', '1']),
                      shell(1.2, command='sleep 1 &', phase='finish', rc=0),
                      file_event(2)])
-        foreground, background = self.packet['actions']
+        foreground, = self.packet['actions']
+        background, = self.packet['context']
         self.assertNotIn('effects', foreground)
         self.assertEqual(background['via'], 'effect')
 
     def test_pid_reuse_creates_a_new_unknown_status_action(self):
         self.export([executed(1, ['one'], ppid=99), executed(2, ['two'], ppid=99)])
-        self.assertEqual([a['cmd'] for a in self.packet['actions']], ['one', 'two'])
-        self.assertTrue(all(a['rc'] is None for a in self.packet['actions']))
+        self.assertEqual([a['cmd'] for a in self.packet['context']], ['one', 'two'])
+        self.assertTrue(all(a['rc'] is None for a in self.packet['context']))
+        self.assertEqual(self.packet['actions'], [])
 
     def test_cd_and_unfinished_commands_preserve_unknowns(self):
         self.export([shell(1, command='cd /tmp'),
@@ -220,10 +223,64 @@ class CompactTests(unittest.TestCase):
                               file_event(3, path='/dev/tty', syscall_success=False,
                                          syscall_return=-6),
                               file_event(4, syscall='unlink', path='/dev/null')])
-        self.assertEqual(len(self.packet['actions']), 2)
+        self.assertEqual(len(self.packet['context']), 2)
         self.assertEqual(result['discarded']['instrumentation'], 1)
         self.assertEqual(result['discarded']['terminal_device_opens'], 1)
-        self.assertEqual(self.packet['actions'][0]['effects'][0]['sysrc'], -6)
+        self.assertEqual(self.packet['context'][0]['effects'][0]['sysrc'], -6)
+
+    def test_ssh_startup_and_separate_stop_connection_are_not_user_actions(self):
+        other = {**ACTOR, 'session_id': 4}
+        ssh = event(.1, kind='connect', process={'pid': 9, 'ppid': 1,
+                    'name': 'sshd', 'executable': '/usr/sbin/sshd'})
+        control_ssh = event(5, kind='connect', actor=other, process={'pid': 90, 'ppid': 1,
+                            'name': 'sshd', 'executable': '/usr/sbin/sshd'})
+        events = [ssh, executed(.2, ['run-parts', '/etc/update-motd.d'], ppid=9),
+                  file_event(.3, path='/run/motd.dynamic.new'),
+                  shell(1, command='curl url'), shell(2, command='curl url', phase='finish', rc=7),
+                  shell(3, command='ls -al', command_id='two'),
+                  shell(4, command='ls -al', command_id='two', phase='finish', rc=0),
+                  control_ssh, executed(5.1, ['run-parts', '/etc/update-motd.d'], actor=other),
+                  executed(5.2, ['bash', '-c', 'incident-audit stop --session-id attempt-001'],
+                           actor=other)]
+        result = self.export(events)
+        self.assertEqual([a['cmd'] for a in self.packet['actions']], ['curl url', 'ls -al'])
+        self.assertEqual(self.packet['context'], [])
+        self.assertEqual(result['discarded']['ssh_initialization'], 3)
+        self.assertEqual(result['discarded']['control_connection'], 3)
+        self.assertEqual(self.packet['coverage']['user_commands'], 2)
+
+    def test_explicit_user_motd_command_is_preserved(self):
+        self.export([shell(1, command='run-parts /etc/update-motd.d'),
+                     executed(1.1, ['run-parts', '/etc/update-motd.d']),
+                     shell(2, command='run-parts /etc/update-motd.d', phase='finish', rc=0)])
+        row, = self.packet['actions']
+        self.assertEqual(row['cmd'], 'run-parts /etc/update-motd.d')
+
+    def test_remote_command_without_bash_hook_is_context_not_deleted(self):
+        self.export([executed(1, ['curl', 'url'])])
+        self.assertEqual(self.packet['actions'], [])
+        self.assertEqual(self.packet['context'][0]['cmd'], 'curl url')
+
+    def test_unrelated_sshd_transport_is_discarded_but_user_sshd_command_survives(self):
+        automatic = event(.1, kind='connect', actor={**ACTOR, 'session_id': 9},
+                          process={'pid': 99, 'ppid': 1,
+                          'executable': '/usr/sbin/sshd'})
+        explicit = executed(1.1, ['/usr/sbin/sshd', '-t'])
+        explicit['process']['executable'] = '/usr/sbin/sshd'
+        result = self.export([automatic, shell(1, command='sshd -t'), explicit,
+                              shell(2, command='sshd -t', phase='finish', rc=0)])
+        self.assertEqual([a['cmd'] for a in self.packet['actions']], ['sshd -t'])
+        self.assertEqual(result['discarded']['ssh_transport'], 1)
+
+    def test_compound_remote_script_is_not_misclassified_as_control_connection(self):
+        ssh = event(.1, kind='connect', process={'executable': '/usr/sbin/sshd'})
+        self.export([ssh, executed(1, ['bash', '-c', 'incident-audit status; curl url'])])
+        self.assertEqual(len(self.packet['context']), 1)
+
+    def test_explicit_collector_command_is_not_a_repair_step(self):
+        result = self.export([shell(1, command='incident-audit status')])
+        self.assertEqual(self.packet['actions'], [])
+        self.assertEqual(result['discarded']['instrumentation'], 1)
 
     def test_budget_failure_does_not_publish_or_replace_existing_packet(self):
         self.export([shell(1)])
