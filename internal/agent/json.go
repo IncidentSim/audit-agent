@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -67,6 +68,13 @@ func readJSON(path string) (Object, error) {
 }
 func Atomic(path string, v any) error { return AtomicText(path, append(JSON(v), '\n')) }
 func AtomicText(path string, b []byte) error {
+	return atomicWrite(path, func(w io.Writer) error {
+		_, err := w.Write(b)
+		return err
+	})
+}
+
+func atomicWrite(path string, write func(io.Writer) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -76,7 +84,7 @@ func AtomicText(path string, b []byte) error {
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	if _, err = f.Write(b); err == nil {
+	if err = write(f); err == nil {
 		err = f.Sync()
 	}
 	ce := f.Close()

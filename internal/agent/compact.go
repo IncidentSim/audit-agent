@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path"
@@ -353,12 +354,20 @@ func limited(groups []detailGroup, limit int) ([]Object, int) {
 	return result, omitted
 }
 func ReadEvents(file string) ([]Object, error) {
+	events := []Object{}
+	err := scanEvents(file, func(event Object) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func scanEvents(file string, visit func(Object) error) error {
 	f, e := os.Open(file)
 	if e != nil {
-		return nil, e
+		return e
 	}
 	defer f.Close()
-	r := []Object{}
 	s := bufio.NewScanner(f)
 	s.Buffer(make([]byte, 65536), 32<<20)
 	line := 0
@@ -369,13 +378,29 @@ func ReadEvents(file string) ([]Object, error) {
 		}
 		var v Object
 		if json.Unmarshal(s.Bytes(), &v) != nil {
-			return nil, fmt.Errorf("invalid JSONL at line %d", line)
+			return fmt.Errorf("invalid JSONL at line %d", line)
 		}
-		r = append(r, v)
+		if err := visit(v); err != nil {
+			return err
+		}
 	}
-	return r, s.Err()
+	return s.Err()
 }
 func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) (Object, Object, Object, error) {
+	return buildPacket(func(visit func(Object) error) error {
+		for _, event := range events {
+			if err := visit(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, manifest, effectsLimit, execLimit)
+}
+
+// The first pass establishes shell intervals; the second attributes events.
+// Re-read the immutable snapshot instead of retaining every decoded event.
+func buildPacket(read func(func(Object) error) error, manifest Object, effectsLimit, execLimit int) (Object, Object, Object, error) {
+	inputEvents := 0
 	w := obj(manifest["capture"])
 	if w["phase"] != "stopped" {
 		return nil, nil, nil, errors.New("a manifest with a stopped recording window is required")
@@ -389,9 +414,10 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 	discarded := Object{}
 	discard := func(k string) { discarded[k] = num(discarded[k]) + 1 }
 	ssh, controls := map[string]bool{}, map[string]bool{}
-	for _, e := range events {
+	if err := read(func(e Object) error {
+		inputEvents++
 		if e["capture_session_id"] != w["session_id"] {
-			return nil, nil, nil, errors.New("event belongs to another recording window")
+			return errors.New("event belongs to another recording window")
 		}
 		session := sessionKey(e)
 		p := obj(e["process"])
@@ -402,11 +428,11 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 			controls[session] = true
 		}
 		if e["source"] != "bash" {
-			continue
+			return nil
 		}
 		if controlCommand(str(e["command"])) {
 			discard("instrumentation")
-			continue
+			return nil
 		}
 		id := str(e["command_id"])
 		a := shells[id]
@@ -428,6 +454,9 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 			a.RC = e["exit_status"]
 			a.CWDAfter = e["cwd"]
 		}
+		return nil
+	}); err != nil {
+		return nil, nil, nil, err
 	}
 	byShell := map[any][]*action{}
 	first := map[string]float64{}
@@ -477,25 +506,25 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 	}
 	owners := map[any]ownership{}
 	unattributed := 0
-	for _, e := range events {
+	if err := read(func(e Object) error {
 		source, kind := str(e["source"]), str(e["kind"])
 		if source == "bash" {
-			continue
+			return nil
 		}
 		if collectorEvent(e) {
 			discard("instrumentation")
-			continue
+			return nil
 		}
 		session := sessionKey(e)
 		t := moment(e["timestamp"])
 		if source == "auditd" {
 			if controls[session] {
 				discard("control_connection")
-				continue
+				return nil
 			}
 			if start, ok := first[session]; ok && ssh[session] && t < start {
 				discard("ssh_initialization")
-				continue
+				return nil
 			}
 		}
 		if kind == "file" && (e["syscall"] == "open" || e["syscall"] == "openat") && e["syscall_success"] == true {
@@ -512,18 +541,18 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 			}
 			if only {
 				discard("terminal_device_opens")
-				continue
+				return nil
 			}
 		}
 		if source == "control" {
 			if e["label"] == "recording_started" || e["label"] == "recording_stopped" {
 				discard("boundary_markers")
-				continue
+				return nil
 			}
 			a := newAction(e, "note", str(e["event_id"]))
 			a.Note = e["label"]
 			actions = append(actions, a)
-			continue
+			return nil
 		}
 		if source != "auditd" || (kind != "exec" && kind != "file" && kind != "connect" && kind != "chdir") {
 			important := []any{}
@@ -543,7 +572,7 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 				}
 				discard(kind)
 			}
-			continue
+			return nil
 		}
 		p := obj(e["process"])
 		pid, ppid, actor := p["pid"], p["ppid"], actorKey(e)
@@ -561,7 +590,7 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 		}
 		if owner == nil && kind != "exec" && (p["executable"] == "/usr/sbin/sshd" || p["executable"] == "/usr/bin/sshd") {
 			discard("ssh_transport")
-			continue
+			return nil
 		}
 		if kind == "exec" {
 			args := p["argv"]
@@ -592,7 +621,7 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 			if pid != nil && len(byShell[pid]) == 0 {
 				owners[pid] = ownership{ppid, owner}
 			}
-			continue
+			return nil
 		}
 		if owner == nil {
 			owner = newAction(e, "effect", str(e["event_id"]))
@@ -615,6 +644,9 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 		} else if owner.Kind != "command" {
 			owner.Effects = groupAdd(owner.Effects, fileDetail(e, owner))
 		}
+		return nil
+	}); err != nil {
+		return nil, nil, nil, err
 	}
 	sort.SliceStable(actions, func(i, j int) bool {
 		if actions[i].Start == actions[j].Start {
@@ -730,7 +762,7 @@ func BuildPacket(events []Object, manifest Object, effectsLimit, execLimit int) 
 		refs[fmt.Sprint(id)] = a.Refs
 	}
 	packet := Object{"v": 1, "session": w["session_id"], "duration_s": round(end - baseline), "actors": actors, "coverage": Object{"stdout": false, "file_contents": false, "exit_status": "bash_only", "audit_lost_total": obj(manifest["audit"])["lost"], "dispatcher_errors": obj(manifest["collector"])["conversion_errors"], "unattributed_effects": unattributed, "omitted_details": omitted, "attribution": "best_effort_pid_parent_and_shell_interval", "user_commands": len(shells), "redaction": "known_secret_patterns_only"}, "legend": Object{"t": "seconds since recording start", "s": "actor ID", "dt": "observed command duration in seconds", "rc": "observed Bash status; null is unknown", "cwd": "actor cwd is the default; null is unknown", "sysrc": "syscall return, not program status; -115 means connect in progress", "effects": "observed operations, not file diffs; order is preserved", "via": "exec lacks a Bash command; effect has uncertain attribution", "context": "unattributed telemetry; never treat as user-entered commands"}, "actions": timeline, "context": contextRows}
-	stats := Object{"input_events": len(events), "actions": len(timeline), "context_rows": len(contextRows), "shell_commands": len(shells), "discarded": discarded, "omitted_details": omitted, "redacted_command_rows": redacted}
+	stats := Object{"input_events": inputEvents, "actions": len(timeline), "context_rows": len(contextRows), "shell_commands": len(shells), "discarded": discarded, "omitted_details": omitted, "redacted_command_rows": redacted}
 	return redactTree(packet).(Object), refs, stats, nil
 }
 
@@ -770,11 +802,7 @@ func Compact(o CompactOptions) (Object, error) {
 	if e != nil {
 		return nil, e
 	}
-	events, e := ReadEvents(o.Input)
-	if e != nil {
-		return nil, e
-	}
-	packet, refs, stats, e := BuildPacket(events, manifest, o.EffectsLimit, o.ExecLimit)
+	packet, refs, stats, e := buildPacket(func(visit func(Object) error) error { return scanEvents(o.Input, visit) }, manifest, o.EffectsLimit, o.ExecLimit)
 	if e != nil {
 		return nil, e
 	}
@@ -782,15 +810,24 @@ func Compact(o CompactOptions) (Object, error) {
 	if o.MaxBytes > 0 && len(text) > o.MaxBytes {
 		return nil, fmt.Errorf("compact packet is %d bytes, above %d; no commands were silently dropped", len(text), o.MaxBytes)
 	}
-	source, e := os.ReadFile(o.Input)
+	source, e := os.Open(o.Input)
 	if e != nil {
 		return nil, e
 	}
-	stats["source_bytes"] = len(source)
+	hash := sha256.New()
+	sourceBytes, e := io.Copy(hash, source)
+	closeErr := source.Close()
+	if e != nil {
+		return nil, e
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	stats["source_bytes"] = sourceBytes
 	stats["compact_bytes"] = len(text)
-	stats["byte_reduction_pct"] = math.Round(10000*(1-float64(len(text))/math.Max(1, float64(len(source))))) / 100
+	stats["byte_reduction_pct"] = math.Round(10000*(1-float64(len(text))/math.Max(1, float64(sourceBytes)))) / 100
 	stats["token_counts"] = nil
-	if e = Atomic(sources, Object{"source": o.Input, "sha256": fmt.Sprintf("%x", sha256.Sum256(source)), "actions": refs}); e != nil {
+	if e = Atomic(sources, Object{"source": o.Input, "sha256": fmt.Sprintf("%x", hash.Sum(nil)), "actions": refs}); e != nil {
 		return nil, e
 	}
 	if e = Atomic(statsPath, stats); e != nil {

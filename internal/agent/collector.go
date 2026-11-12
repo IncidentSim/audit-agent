@@ -300,12 +300,25 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		return nil, e
 	}
 	defer unlock()
+	// A SIGKILL/OOM cannot run deferred cleanup. With the export lock held,
+	// these private snapshots belong only to interrupted previous exports.
+	entries, e := os.ReadDir(a.Root)
+	if e != nil {
+		return nil, e
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".export-") {
+			if e = os.RemoveAll(filepath.Join(a.Root, entry.Name())); e != nil {
+				return nil, e
+			}
+		}
+	}
 	temporary, e := os.MkdirTemp(a.Root, ".export-")
 	if e != nil {
 		return nil, e
 	}
 	defer os.RemoveAll(temporary)
-	events := map[string]Object{}
+	candidates := &diskSort{dir: temporary}
 	bad := 0
 	insert := func(v Object, replace bool) error {
 		if e := required(v, "event_id", "timestamp"); e != nil {
@@ -321,11 +334,11 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		if v["origin"] == "instrumentation" && !o.IncludeInstrumentation {
 			return nil
 		}
-		id := str(v["event_id"])
-		if events[id] == nil || replace {
-			events[id] = v
+		priority := byte(0)
+		if replace {
+			priority = 1
 		}
-		return nil
+		return candidates.Add(str(v["event_id"]), append([]byte{priority}, JSON(v)...))
 	}
 	dirs := []string{source}
 	if w == nil {
@@ -369,8 +382,13 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		s.Buffer(make([]byte, 65536), 32<<20)
 		for s.Scan() {
 			var event Object
-			if json.Unmarshal(s.Bytes(), &event) != nil || insert(event, false) != nil {
+			if json.Unmarshal(s.Bytes(), &event) != nil || required(event, "event_id", "timestamp") != nil {
 				bad++
+				continue
+			}
+			if err = insert(event, false); err != nil {
+				f.Close()
+				return nil, err
 			}
 		}
 		err = s.Err()
@@ -397,6 +415,7 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 			return nil, e
 		}
 	}
+	rawRecords := &diskSort{dir: temporary}
 	for i := range raw {
 		f, err := os.Open(filepath.Join(temporary, fmt.Sprintf("raw-%d", i)))
 		if err != nil {
@@ -405,7 +424,15 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		s := bufio.NewScanner(f)
 		s.Buffer(make([]byte, 65536), 32<<20)
 		for s.Scan() {
-			if e = parser.Feed(s.Text()); e != nil {
+			key, keep, keyErr := rawExportKey(s.Text(), w)
+			if keyErr != nil {
+				f.Close()
+				return nil, keyErr
+			}
+			if !keep {
+				continue
+			}
+			if e = rawRecords.Add(key, s.Bytes()); e != nil {
 				f.Close()
 				return nil, e
 			}
@@ -415,6 +442,18 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	previous := ""
+	if e = rawRecords.Finish(func(row sortRecord) error {
+		if row.key != previous {
+			if err := parser.Flush(0); err != nil {
+				return err
+			}
+			previous = row.key
+		}
+		return parser.Feed(string(row.data))
+	}); e != nil {
+		return nil, e
 	}
 	if e = parser.Flush(0); e != nil {
 		return nil, e
@@ -427,23 +466,8 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 			}
 		}
 	}
-	ordered := make([]Object, 0, len(events))
-	for _, v := range events {
-		ordered = append(ordered, v)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		ti, tj := moment(ordered[i]["timestamp"]), moment(ordered[j]["timestamp"])
-		if ti == tj {
-			return str(ordered[i]["event_id"]) < str(ordered[j]["event_id"])
-		}
-		return ti < tj
-	})
-	var data strings.Builder
-	for _, v := range ordered {
-		data.Write(JSON(v))
-		data.WriteByte('\n')
-	}
-	if e = AtomicText(output, []byte(data.String())); e != nil {
+	summary, e := publishExport(candidates, output, temporary)
+	if e != nil {
 		return nil, e
 	}
 	manifest, e := a.Status()
@@ -457,13 +481,9 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 		manifest["capture"] = sealed
 	}
 	manifest["schema_version"] = 1
-	manifest["events"] = len(ordered)
-	manifest["first_event"] = nil
-	manifest["last_event"] = nil
-	if len(ordered) > 0 {
-		manifest["first_event"] = ordered[0]["timestamp"]
-		manifest["last_event"] = ordered[len(ordered)-1]["timestamp"]
-	}
+	manifest["events"] = summary.Count
+	manifest["first_event"] = summary.First
+	manifest["last_event"] = summary.Last
 	manifest["invalid_jsonl_lines"] = bad
 	manifest["raw_logs_reparsed"] = len(raw)
 	manifest["output"] = output
@@ -472,7 +492,7 @@ func (a *Agent) Export(o ExportOptions, w Object) (Object, error) {
 	if e = Atomic(manifestPath, manifest); e != nil {
 		return nil, e
 	}
-	result := Object{"output": output, "events": len(ordered), "manifest": manifestPath}
+	result := Object{"output": output, "events": summary.Count, "manifest": manifestPath}
 	if w != nil {
 		compact, err := Compact(CompactOptions{Input: output, Manifest: manifestPath, EffectsLimit: 24, ExecLimit: 12})
 		if err != nil {
