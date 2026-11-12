@@ -226,5 +226,13 @@ func Install(vm string, skipPackages bool) error {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	return errors.New("JSONL dispatcher did not become ready; inspect journalctl -u auditd")
+	health, healthErr := os.ReadFile("/var/log/incidentsim/collector-health.json")
+	if healthErr != nil {
+		health = []byte(healthErr.Error())
+	}
+	journal, journalErr := exec.Command("journalctl", "-u", "auditd.service", "--since", fmt.Sprintf("@%d", started.Unix()), "-n", "40", "--no-pager").CombinedOutput()
+	if journalErr != nil {
+		journal = append(journal, []byte("\njournalctl: "+journalErr.Error())...)
+	}
+	return fmt.Errorf("JSONL dispatcher did not become ready\ncollector health: %s\nauditd journal:\n%s", strings.TrimSpace(string(health)), strings.TrimSpace(string(journal)))
 }

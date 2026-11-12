@@ -141,8 +141,22 @@ var syscall64 = map[int]string{2: "open", 3: "close", 42: "connect", 59: "execve
 var syscall32 = map[int]string{5: "open", 8: "creat", 9: "link", 10: "unlink", 11: "execve", 12: "chdir", 14: "mknod", 15: "chmod", 16: "lchown", 30: "utime", 38: "rename", 39: "mkdir", 40: "rmdir", 83: "symlink", 92: "truncate", 93: "ftruncate", 94: "fchmod", 95: "fchown", 102: "socketcall", 133: "fchdir", 182: "chown", 226: "setxattr", 227: "lsetxattr", 228: "fsetxattr", 235: "removexattr", 236: "lremovexattr", 237: "fremovexattr", 271: "utimes", 295: "openat", 296: "mkdirat", 298: "fchownat", 301: "unlinkat", 302: "renameat", 303: "linkat", 304: "symlinkat", 306: "fchmodat", 320: "utimensat", 353: "renameat2", 358: "execveat", 362: "connect", 437: "openat2"}
 
 func LoadSyscalls() error {
+	tool, err := exec.LookPath("ausyscall")
+	if err != nil {
+		// auditd launches plugins with execve(..., NULL), without PATH.
+		// Resolve the auditd utility from standard system directories as well.
+		for _, dir := range []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin"} {
+			if candidate, lookupErr := exec.LookPath(path.Join(dir, "ausyscall")); lookupErr == nil {
+				tool, err = candidate, nil
+				break
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("locate ausyscall (install the auditd package): %w", err)
+		}
+	}
 	for arch, table := range map[string]map[int]string{"x86_64": syscall64, "i386": syscall32} {
-		out, e := exec.Command("ausyscall", arch, "--dump").Output()
+		out, e := exec.Command(tool, arch, "--dump").Output()
 		if e != nil {
 			return fmt.Errorf("load %s syscall names: %w", arch, e)
 		}
