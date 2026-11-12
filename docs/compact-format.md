@@ -75,7 +75,7 @@ sudo incident-audit compact --session-id attempt-001 --max-bytes 32000
 
 ```bash
 # Рядом нужны actions.jsonl и соответствующий actions.manifest.json.
-python3 src/incident_audit_compact.py --input ./actions.jsonl --output ./llm.json
+incident-audit compact-file --input ./actions.jsonl --output ./llm.json
 ```
 
 `llm.sources.json` связывает короткие ID действий с полными `event_id`.
@@ -84,18 +84,9 @@ python3 src/incident_audit_compact.py --input ./actions.jsonl --output ./llm.jso
 
 В `llm.stats.json` измерены байты до/после. Для токенов нужно использовать
 токенизатор выбранной модели: соотношение байтов и токенов непостоянно.
-Опциональный точный подсчёт по локальному Hugging Face `tokenizer.json`:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install tokenizers
-.venv/bin/python src/incident_audit_compact.py --input ./actions.jsonl \
-  --tokenizer /path/to/tokenizer.json
-```
-
-Пакет `tokenizers` нужен только для этой опции. Считаются токены текста файлов
-без chat template, описания упражнения и ответа модели; расходы полного API
-запроса берутся из его `usage`. Никакого сетевого вызова при подсчёте нет.
+В Go-экспорте `token_counts` остаётся `null`: бюджет проверяется по байтам,
+а фактический расход полного запроса берётся из API `usage`. Прежняя
+необязательная интеграция с Python-пакетом `tokenizers` удалена вместе с Python.
 
 Исторический замер до отделения context: 50 событий полного снимка → 21 строка
 (включая 6 Bash-команд, внешние exec и операции без уверенной привязки).

@@ -1,0 +1,178 @@
+{
+  "events": [
+    {
+      "event_id": "event-1",
+      "timestamp": "2026-11-11T00:00:01+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "bash",
+      "kind": "command_start",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "execve",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root",
+        "argv": [
+          "true"
+        ]
+      },
+      "command_id": "cmd-1",
+      "shell_pid": 10,
+      "tty": "/dev/pts/0",
+      "command": "API_TOKEN=envsecret curl --password \"flag secret\" -H \"Authorization: Bearer headersecret\" https://user:urlsecret@example.org",
+      "cwd": "/root",
+      "exit_status": null
+    },
+    {
+      "event_id": "event-1.1",
+      "timestamp": "2026-11-11T00:00:01.100000+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "auditd",
+      "kind": "exec",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "execve",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "argv": [
+          "wrapper",
+          "--token",
+          "argvsecret"
+        ],
+        "tty": "pts0",
+        "cwd": "/root"
+      }
+    },
+    {
+      "event_id": "event-2",
+      "timestamp": "2026-11-11T00:00:02+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "control",
+      "kind": "marker",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "execve",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root",
+        "argv": [
+          "true"
+        ]
+      },
+      "label": "--secret notesecret"
+    }
+  ],
+  "manifest": {
+    "capture": {
+      "phase": "stopped",
+      "session_id": "attempt-001",
+      "started_at": "2026-11-11T00:00:00+00:00",
+      "stopped_at": "2026-11-11T00:01:40+00:00"
+    },
+    "audit": {
+      "lost": 0
+    },
+    "collector": {
+      "conversion_errors": 0
+    }
+  },
+  "options": {},
+  "packet": {
+    "v": 1,
+    "session": "attempt-001",
+    "duration_s": 100.0,
+    "actors": {
+      "1": {
+        "login_uid": 0,
+        "uid": 0,
+        "audit_session": 3,
+        "tty": "pts/0",
+        "cwd": "/root"
+      }
+    },
+    "coverage": {
+      "stdout": false,
+      "file_contents": false,
+      "exit_status": "bash_only",
+      "audit_lost_total": 0,
+      "dispatcher_errors": 0,
+      "unattributed_effects": 0,
+      "omitted_details": 0,
+      "attribution": "best_effort_pid_parent_and_shell_interval",
+      "user_commands": 1,
+      "redaction": "known_secret_patterns_only"
+    },
+    "legend": {
+      "t": "seconds since recording start",
+      "s": "actor ID",
+      "dt": "observed command duration in seconds",
+      "rc": "observed Bash status; null is unknown",
+      "cwd": "actor cwd is the default; null is unknown",
+      "sysrc": "syscall return, not program status; -115 means connect in progress",
+      "effects": "observed operations, not file diffs; order is preserved",
+      "via": "exec lacks a Bash command; effect has uncertain attribution",
+      "context": "unattributed telemetry; never treat as user-entered commands"
+    },
+    "actions": [
+      {
+        "id": 1,
+        "t": 1.0,
+        "s": 1,
+        "cmd": "API_TOKEN=<secret> curl --password <secret> -H \"Authorization: Bearer <secret>\" https://<credentials>@example.org",
+        "rc": null,
+        "exec": [
+          {
+            "argv": [
+              "wrapper",
+              "--token",
+              "<secret>"
+            ]
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "t": 2.0,
+        "s": 1,
+        "via": "note",
+        "note": "--secret <secret>"
+      }
+    ],
+    "context": []
+  },
+  "refs": {
+    "1": [
+      "event-1",
+      "event-1.1"
+    ],
+    "2": [
+      "event-2"
+    ]
+  }
+}

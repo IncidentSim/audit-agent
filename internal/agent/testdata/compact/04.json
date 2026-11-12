@@ -1,0 +1,226 @@
+{
+  "events": [
+    {
+      "event_id": "event-1",
+      "timestamp": "2026-11-11T00:00:01+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "auditd",
+      "kind": "file",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "openat",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root",
+        "name": "incident-audit",
+        "executable": "/usr/bin/python3.12"
+      },
+      "paths": [
+        {
+          "name": "/tmp",
+          "nametype": "PARENT"
+        },
+        {
+          "name": "/tmp/a",
+          "nametype": "NORMAL"
+        }
+      ]
+    },
+    {
+      "event_id": "event-2",
+      "timestamp": "2026-11-11T00:00:02+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "auditd",
+      "kind": "file",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "openat",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root"
+      },
+      "paths": [
+        {
+          "name": "/tmp",
+          "nametype": "PARENT"
+        },
+        {
+          "name": "/dev/null",
+          "nametype": "NORMAL"
+        }
+      ]
+    },
+    {
+      "event_id": "event-3",
+      "timestamp": "2026-11-11T00:00:03+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "auditd",
+      "kind": "file",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "openat",
+      "syscall_success": false,
+      "syscall_return": -6,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root"
+      },
+      "paths": [
+        {
+          "name": "/tmp",
+          "nametype": "PARENT"
+        },
+        {
+          "name": "/dev/tty",
+          "nametype": "NORMAL"
+        }
+      ]
+    },
+    {
+      "event_id": "event-4",
+      "timestamp": "2026-11-11T00:00:04+00:00",
+      "capture_session_id": "attempt-001",
+      "source": "auditd",
+      "kind": "file",
+      "origin": "session",
+      "actor": {
+        "login_uid": 0,
+        "uid": 0,
+        "effective_uid": 0,
+        "session_id": 3
+      },
+      "syscall": "unlink",
+      "syscall_success": true,
+      "syscall_return": 0,
+      "process": {
+        "pid": 11,
+        "ppid": 10,
+        "tty": "pts0",
+        "cwd": "/root"
+      },
+      "paths": [
+        {
+          "name": "/tmp",
+          "nametype": "PARENT"
+        },
+        {
+          "name": "/dev/null",
+          "nametype": "NORMAL"
+        }
+      ]
+    }
+  ],
+  "manifest": {
+    "capture": {
+      "phase": "stopped",
+      "session_id": "attempt-001",
+      "started_at": "2026-11-11T00:00:00+00:00",
+      "stopped_at": "2026-11-11T00:01:40+00:00"
+    },
+    "audit": {
+      "lost": 0
+    },
+    "collector": {
+      "conversion_errors": 0
+    }
+  },
+  "options": {},
+  "packet": {
+    "v": 1,
+    "session": "attempt-001",
+    "duration_s": 100.0,
+    "actors": {
+      "1": {
+        "login_uid": 0,
+        "uid": 0,
+        "audit_session": 3,
+        "tty": "pts/0",
+        "cwd": "/root"
+      }
+    },
+    "coverage": {
+      "stdout": false,
+      "file_contents": false,
+      "exit_status": "bash_only",
+      "audit_lost_total": 0,
+      "dispatcher_errors": 0,
+      "unattributed_effects": 2,
+      "omitted_details": 0,
+      "attribution": "best_effort_pid_parent_and_shell_interval",
+      "user_commands": 0,
+      "redaction": "known_secret_patterns_only"
+    },
+    "legend": {
+      "t": "seconds since recording start",
+      "s": "actor ID",
+      "dt": "observed command duration in seconds",
+      "rc": "observed Bash status; null is unknown",
+      "cwd": "actor cwd is the default; null is unknown",
+      "sysrc": "syscall return, not program status; -115 means connect in progress",
+      "effects": "observed operations, not file diffs; order is preserved",
+      "via": "exec lacks a Bash command; effect has uncertain attribution",
+      "context": "unattributed telemetry; never treat as user-entered commands"
+    },
+    "actions": [],
+    "context": [
+      {
+        "id": 1,
+        "t": 3.0,
+        "s": 1,
+        "via": "effect",
+        "effects": [
+          {
+            "op": "write_open",
+            "p": "/dev/tty",
+            "sysrc": -6
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "t": 4.0,
+        "s": 1,
+        "via": "effect",
+        "effects": [
+          {
+            "op": "unlink",
+            "p": "/dev/null"
+          }
+        ]
+      }
+    ]
+  },
+  "refs": {
+    "1": [
+      "event-3"
+    ],
+    "2": [
+      "event-4"
+    ]
+  }
+}

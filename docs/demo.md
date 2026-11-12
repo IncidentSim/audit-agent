@@ -1,55 +1,36 @@
-# Полуручная проверка на microVM
+# Проверка на отдельной учебной VM
 
-Команды ниже выполняются на хосте из корня `audit-agent`, в PowerShell с Python.
-VM должна быть подготовлена заранее; `scripts/demo.py` не создаёт её и не
-открывает запись автоматически. Текущий прогон настроен в
-`analysis/demo-current/session.json` (локальный файл, не входит в Git).
+Соберите агент через `go run tools/build.go`, установите его на VM командой
+`incident-audit deploy root@vm --verify`. Для сбора не нужны Python и ключ LLM.
 
-1. Вставьте ключ DeepSeek в `.secrets/deepseek-api-key`, одной строкой.
-2. Подключитесь: `python scripts/demo.py connect --run-dir analysis/demo-current`.
-3. Выполните задание из [task.md](../examples/http-service/task.md).
-   Запись уже включена. Начальная проверка: `curl http://127.0.0.1:8080/health`.
-   Неисправность внесена намеренно. Выход из SSH — `exit`.
-4. На хосте выполните:
+На одноразовой VM, до начала пользовательской записи:
 
-```powershell
-python scripts/demo.py finish --run-dir analysis/demo-current
+```bash
+sudo incident-audit demo-provision
+sudo incident-audit start --session-id unique-attempt-id
 ```
 
-Команда сначала закрывает окно auditd, сохраняет полный и компактный журналы
-в `analysis/demo-current/artifacts/`. Компактный пакет пересобирается на хосте
-по актуальным правилам отделения действий от SSH/служебных событий, в том числе
-для старого сборщика на VM. Затем выполняется валидатор. Его результат
-пишется в `analysis/demo-current/validation.json`. После этого компактный журнал,
-описание задачи и результат проверки отправляются в LLM. Ответ выводится
-в терминал и сохраняется в `analysis/demo-current/report/analysis.md`, а
-метаданные и расход токенов — в соседний `analysis.json`.
+`demo-provision` создаёт Go HTTP-сервис, проверяет исправный порт 8080, затем
+вносит неисправность порта. Команда сбрасывает задачу; запускать её во время
+пользовательской попытки нельзя.
 
-`finish --dry-run` тоже **закрывает запись** и выполняет валидацию, но не вызывает
-LLM. После такого прогона можно повторить finish без dry-run для того же снимка.
-При отсутствии ключа запись и результаты валидации сохраняются; добавьте ключ
-и повторите finish. Успешно созданный report защищён от перезаписи и повторного
-платного запроса. Для новой пользовательской попытки нужна новая сессия записи.
-
-Входящие данные LLM не включают stdout команд и diff файлов. Результат валидатора
-сообщает, восстановлен ли сервис; модель должна учитывать ограниченность логов.
-Сборщик и экспорт работают и без ключа. Сам ключ в microVM не передаётся.
-
-## Подготовка следующего прогона
-
-На отдельной Ubuntu/Debian VM установите агент через `deploy.py`. Пока запись
-выключена, передайте `examples/http-service/provision.py` в stdin `ssh ... python3 -`.
-Скрипт проверяет исправный сервис, затем намеренно меняет его конфигурацию.
-Его нельзя запускать в пользовательской попытке: он сбрасывает состояние задачи.
-
-На хосте создайте новый каталог `analysis/имя/session.json`:
+На компьютере проверяющего создайте `analysis/demo-current/session.json`:
 
 ```json
-{"vm_id":"vm-id","session_id":"unique-attempt-id","target":"root@vm-ip","ssh_command":["ssh","-i","/path/to/private-key","-o","BatchMode=yes"]}
+{"session_id":"unique-attempt-id","target":"root@vm-ip","ssh_command":["ssh","-i","/path/to/key","-o","BatchMode=yes"]}
 ```
 
-Для Windows с VM в WSL массив начинается с
-`["wsl.exe","-d","Ubuntu","--exec","ssh", ...]`, пути ключей относятся к WSL.
-Это доверенная конфигурация запуска команд на хосте. Файл содержит путь к SSH-ключу,
-но не его содержимое. На VM вызовите `incident-audit start --session-id unique-attempt-id`
-после подготовки и перед передачей доступа пользователю.
+`ssh_command` — доверенная локальная конфигурация; поддерживается SSH через WSL.
+Пути ключей должны соответствовать выбранному окружению.
+
+```bash
+incident-audit demo connect --run-dir analysis/demo-current
+incident-audit demo finish --run-dir analysis/demo-current --config config/llm.local.json
+```
+
+Внутри SSH выполните задание из [task.md](../examples/http-service/task.md).
+`finish` закрывает запись, скачивает журналы, пересобирает пакет, вызывает на VM
+`incident-audit demo-validate` за пределами окна и запускает отдельный LLM-анализ
+на хосте. Отчёт — `report/analysis.md` и JSON. Ключ в VM не передаётся.
+`finish --dry-run` закрывает запись и выполняет валидацию без вызова модели.
+Для новой попытки нужен новый session ID.
